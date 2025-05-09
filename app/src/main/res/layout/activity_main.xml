@@ -11,7 +11,7 @@
         android:id="@+id/txtString"
         android:layout_width="94dp"
         android:layout_height="33dp"
-        android:layout_marginStart="188dp"
+        android:layout_marginStart="156dp"
         android:layout_marginTop="16dp"
         android:fontFamily="monospace"
         android:text="START APP"
@@ -26,8 +26,8 @@
         android:id="@+id/lstview"
         android:layout_width="357dp"
         android:layout_height="521dp"
-        android:layout_marginTop="100dp"
-        android:layout_marginEnd="44dp"
+        android:layout_marginTop="96dp"
+        android:layout_marginEnd="24dp"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
@@ -37,27 +37,37 @@
         android:layout_height="wrap_content"
         android:layout_marginStart="20dp"
         android:layout_marginTop="650dp"
-        android:text="Request Permissions"
+        android:text="Permissions"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="0.162"
+        app:layout_constraintHorizontal_bias="0.0"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_bias="0.953" />
+        app:layout_constraintVertical_bias="0.969" />
 
     <Button
-        android:id="@+id/getContactsBtn"
+        android:id="@+id/takeBackupBtn"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="650dp"
         android:layout_marginEnd="20dp"
-        android:text="GET"
+        android:text="BACKUP"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="0.842"
+        app:layout_constraintHorizontal_bias="0.531"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_bias="0.953" />
+        app:layout_constraintVertical_bias="0.969" />
+
+    <Button
+        android:id="@+id/clearCacheBtn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="62dp"
+        android:layout_marginEnd="37dp"
+        android:text="Clean"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/lstview" />
 
 
 </androidx.constraintlayout.widget.ConstraintLayout>

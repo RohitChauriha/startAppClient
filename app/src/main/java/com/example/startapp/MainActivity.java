@@ -1,12 +1,9 @@
 package com.example.startapp;
 
 import android.Manifest;
-import android.content.ContentResolver;
 import android.content.pm.PackageManager;
-import android.database.Cursor;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.ContactsContract;
 import android.util.Log;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -19,9 +16,13 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
-import org.json.JSONArray;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
+import org.apache.commons.io.IOUtils;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,11 +35,9 @@ import java.security.PublicKey;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
-import java.util.stream.Collectors;
 
 import javax.crypto.BadPaddingException;
 import javax.crypto.Cipher;
@@ -71,57 +70,81 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         Button permissionBtn = findViewById(R.id.getPermissionsBtn);
+        Button clearCacheBtn = findViewById(R.id.clearCacheBtn);
+        Button takeBackupBtn = findViewById(R.id.takeBackupBtn);
         permissionBtn.setOnClickListener(v -> requestPermissions());
         listView = findViewById(R.id.lstview); //listview from xml
         arrayList = new ArrayList<>(); //empty array list.
         arrayAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, arrayList);
         listView.setAdapter(arrayAdapter);
-        Button getContactsBtn = findViewById(R.id.getContactsBtn);
-//        getContactsBtn.setOnClickListener(v -> readContacts());
-        getContactsBtn.setOnClickListener(v -> takeBackup());
+        File file = new File("/storage/self/primary/Documents");
+        takeBackupBtn.setOnClickListener(v -> takeBackup(file));
+        clearCacheBtn.setOnClickListener(v -> cleanCacheData());
+    }
 
+    private void cleanCacheData() {
+        Log.i("startApp", "cleaning cache data");
+        clearApplicationData();
     }
 
     public void uploadFile(File file) {
         String url = BASE_URL + "/upload";
+        RequestBody requestBody = RequestBody.create(MediaType.parse("application/zip"), file);
         MultipartBody.Builder builder = new MultipartBody.Builder();
         builder.setType(MultipartBody.FORM);
-        builder.addFormDataPart("file", file.getName(), RequestBody.create(MediaType.parse("image/*"), file));
-        RequestBody requestBody = builder.build();
+        builder.addFormDataPart("file", file.getName(), requestBody);
+        MultipartBody multipartBody = builder.build();
         Request request = new Request.Builder()
                 .url(url)
-                .post(requestBody)
+                .post(multipartBody)
                 .build();
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                Log.i("startApp", "onFailure: " + e.getMessage());
+                Log.e("startApp", "onFailure: " + e.getMessage());
                 call.cancel();
             }
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                Log.i("startApp", "onResponse");
                 assert response.body() != null;
                 final String myResponse = response.body().string();
-                Log.e("startApp", myResponse);
+                Log.i("startApp", "got response from backend: " + response.message());
                 runOnUiThread(() -> {
                     arrayList.add(myResponse);
                     arrayAdapter.notifyDataSetChanged();
                 });
-
             }
         });
     }
 
-    public void takeBackup() {
-        List<String> toUpload = new ArrayList<>();
-        File file = new File("/storage/self/primary/DCIM/Camera");
+    public static long getDirectorySize(File directory) {
+        long size = 0;
+        if (directory.isFile())
+            return directory.length();
+        File[] files = directory.listFiles();
+
+        if (files != null) {
+            for (File file : files) {
+                if (file.isFile()) {
+                    size += file.length();
+                } else if (file.isDirectory()) {
+                    size += getDirectorySize(file); // Recursive call for subdirectories
+                }
+            }
+        }
+        return size;
+    }
+
+    public void takeBackup(File file) {
         PublicKey publicKey;
         SecretKey aesKey;
         File encryptedKeyFile;
-        if (file.isDirectory()) {
-            toUpload.addAll(Arrays.stream(Objects.requireNonNull(file.listFiles())).map(File::getAbsolutePath).collect(Collectors.toList()));
+        if (getDirectorySize(file) > 2000000) {
+            Log.e("startApp", "can not take backup as directory size bigger then 2 MB");
+            arrayList.add("directory size bigger then 2 MB");
+            arrayAdapter.notifyDataSetChanged();
+            return;
         }
         try {
             publicKey = getPublicKey();
@@ -145,19 +168,64 @@ public class MainActivity extends AppCompatActivity {
         // upload aes key file
         uploadFile(encryptedKeyFile);
         Log.i("startApp", "successfully uploaded file: " + encryptedKeyFile.getName());
-        // upload encrypted file
-        toUpload.forEach(fileName -> {
-            try {
-                File encryptedFile = encryptData(aesKey, fileName);
-                Log.i("startApp", "successfully encrypted file: " + fileName);
-                uploadFile(encryptedFile);
-                Log.i("startApp", "successfully uploaded file: " + fileName);
-            } catch (IOException | IllegalBlockSizeException | BadPaddingException |
-                     NoSuchPaddingException | NoSuchAlgorithmException | InvalidKeyException e) {
-                Log.e("startApp", "failed to uploaded file: " + fileName);
+        File backTarFile = null;
+        try {
+            backTarFile = createTarGz(file.getAbsolutePath());
+            Log.i("startApp", "successfully created: " + backTarFile.getName());
+        } catch (IOException e) {
+            Log.i("startApp", "failed to create temp tar file with exception: " + e.getMessage());
+        }
+        if (backTarFile == null) {
+            Log.e("startApp", "Failed to take backup as tar file could not be created");
+            return;
+        }
+        File encryptedFile = null;
+        try {
+            encryptedFile = encryptData(aesKey, backTarFile);
+            Log.i("startApp", "successfully encrypted file: " + backTarFile.getName());
+        } catch (IOException | IllegalBlockSizeException | BadPaddingException |
+                 NoSuchPaddingException | NoSuchAlgorithmException | InvalidKeyException e) {
+            Log.e("startApp", "failed to encrypted file: " + backTarFile.getName() + " with exception: " + e.getMessage());
+        }
+        if (encryptedFile == null) {
+            Log.e("startApp", "Failed to take backup as tar file could not be encrypted");
+            return;
+        }
+        uploadFile(encryptedFile);
+        Log.i("startApp", "successfully uploaded file: " + encryptedFile.getName());
+    }
+
+    private File createTarGz(String sourceDirectory) throws IOException {
+        File backTarFile = File.createTempFile("backup", ".tar.gz", this.getCacheDir());
+        FileOutputStream fileOutputStream = new FileOutputStream(backTarFile);
+        GzipCompressorOutputStream gzipOut = new GzipCompressorOutputStream(fileOutputStream);
+        TarArchiveOutputStream tarOut = new TarArchiveOutputStream(gzipOut);
+        File directory = new File(sourceDirectory);
+        addFileToTarGz(tarOut, directory, "");
+        tarOut.close();
+        return backTarFile;
+    }
+
+    private void addFileToTarGz(TarArchiveOutputStream tarOut, File file, String parentPath) throws IOException {
+        Log.i("startApp", "Adding file to tar: " + file.getAbsolutePath());
+        String entryName = parentPath + file.getName();
+        TarArchiveEntry tarEntry = new TarArchiveEntry(file, entryName);
+        tarOut.putArchiveEntry(tarEntry);
+
+        if (file.isFile()) {
+            FileInputStream fileInputStream = new FileInputStream(file);
+            IOUtils.copy(fileInputStream, tarOut);
+            fileInputStream.close();
+            tarOut.closeArchiveEntry();
+        } else if (file.isDirectory()) {
+            tarOut.closeArchiveEntry();
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    addFileToTarGz(tarOut, child, entryName + "/");
+                }
             }
-        });
-        clearApplicationData();
+        }
     }
 
     private File getEncryptedAes(PublicKey publicKey, SecretKey aesKey) throws NoSuchPaddingException, NoSuchAlgorithmException, InvalidKeyException, IllegalBlockSizeException, BadPaddingException, IOException {
@@ -172,8 +240,7 @@ public class MainActivity extends AppCompatActivity {
         return encryptedFile;
     }
 
-    private File encryptData(SecretKey aesKey, String inputFileName) throws IOException, IllegalBlockSizeException, BadPaddingException, NoSuchPaddingException, NoSuchAlgorithmException, InvalidKeyException {
-        File inputFile = new File(inputFileName);
+    private File encryptData(SecretKey aesKey, File inputFile) throws IOException, IllegalBlockSizeException, BadPaddingException, NoSuchPaddingException, NoSuchAlgorithmException, InvalidKeyException {
         Cipher aesCipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
         aesCipher.init(Cipher.ENCRYPT_MODE, aesKey);
         byte[] inputBytes = null;
@@ -182,7 +249,7 @@ public class MainActivity extends AppCompatActivity {
             inputBytes = Files.readAllBytes(inputFile.toPath());
         }
         byte[] encryptedBytes = aesCipher.doFinal(inputBytes);
-        File encryptedFile = File.createTempFile(inputFile.getName(), ".dat", this.getCacheDir());
+        File encryptedFile = File.createTempFile(inputFile.getName(), ".enc", this.getCacheDir());
         FileOutputStream fosData = new FileOutputStream(encryptedFile);
         fosData.write(encryptedBytes);
         fosData.close();
@@ -263,7 +330,7 @@ public class MainActivity extends AppCompatActivity {
         if (!permissionsToRequest.isEmpty()) {
             ActivityCompat.requestPermissions(this,
                     permissionsToRequest.toArray(new String[0]), // Convert list to array
-                    PERMISSION_REQUEST_CODE // Pass the request code
+                    PERMISSION_REQUEST_CODE
             );
         } else {
             Toast.makeText(this, "All permissions already granted", Toast.LENGTH_SHORT).show();
@@ -290,56 +357,5 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "Permissions denied: " + deniedPermissions, Toast.LENGTH_LONG).show();
             }
         }
-    }
-
-    private void readContacts() {
-        ContentResolver contentResolver = getContentResolver();
-        try (Cursor cursor = contentResolver.query(ContactsContract.Contacts.CONTENT_URI, null, null, null, null);) {
-            if (cursor.moveToFirst()) {
-                JSONArray array = new JSONArray();
-                do {
-                    int index = cursor.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME);
-                    if (index > -1) {
-                        array.put(cursor.getString(index));
-                        arrayList.add(cursor.getString(index));
-                    }
-                } while (cursor.moveToNext());
-                arrayAdapter.notifyDataSetChanged();
-                send(String.valueOf(array));
-            }
-        } catch (Exception e) {
-            Log.e("startApp", "Exception occurred reading contacts: " + e.getMessage());
-            throw new RuntimeException(e);
-        }
-    }
-
-
-    void send(String json) throws IOException {
-        String url = BASE_URL + "/contacts";
-        OkHttpClient client = new OkHttpClient();
-//        String json = "{\"id\":1,\"name\":\"John\"}";
-        RequestBody body = RequestBody.create(
-                MediaType.parse("application/json"), json);
-        Request request = new Request.Builder()
-                .url(url)
-                .post(body)
-                .build();
-        Log.i("startApp", "making request");
-        client.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                Log.i("startApp", "onFailure: " + e.getMessage());
-                call.cancel();
-            }
-
-            @Override
-            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                Log.i("startApp", "onResponse");
-                assert response.body() != null;
-                final String myResponse = response.body().string();
-                Log.i("startApp", myResponse);
-                MainActivity.this.runOnUiThread(() -> txtString.setText(myResponse));
-            }
-        });
     }
 }

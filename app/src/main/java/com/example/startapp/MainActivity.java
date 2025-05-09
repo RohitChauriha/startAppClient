@@ -316,9 +316,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void requestPermissions() {
         String[] permissions = {
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.CAMERA,
+                Manifest.permission.INTERNET,
                 Manifest.permission.READ_MEDIA_IMAGES
         };
         List<String> permissionsToRequest = new ArrayList<>();

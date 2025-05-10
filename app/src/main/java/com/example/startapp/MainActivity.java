@@ -1,6 +1,7 @@
 package com.example.startapp;
 
 import android.Manifest;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -12,6 +13,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -60,31 +62,53 @@ public class MainActivity extends AppCompatActivity {
     public String BASE_URL = "http://192.168.1.3:5000";
     private static final int PERMISSION_REQUEST_CODE = 123;
     ListView listView;
-    ArrayList<String> arrayList;
+    ArrayList<String> uploadedFilesList;
+    ArrayList<String> dirsToUpload;
     ArrayAdapter arrayAdapter;
     OkHttpClient client = new OkHttpClient();
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         Log.i("startApp", "created");
         super.onCreate(savedInstanceState);
+        requestPermissions();
         setContentView(R.layout.activity_main);
-        Button permissionBtn = findViewById(R.id.getPermissionsBtn);
         Button clearCacheBtn = findViewById(R.id.clearCacheBtn);
         Button takeBackupBtn = findViewById(R.id.takeBackupBtn);
-        permissionBtn.setOnClickListener(v -> requestPermissions());
-        listView = findViewById(R.id.lstview); //listview from xml
-        arrayList = new ArrayList<>(); //empty array list.
-        arrayAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, arrayList);
+        Button selectorBtn = findViewById(R.id.selectorBtn);
+        listView = findViewById(R.id.lstview);
+        uploadedFilesList = new ArrayList<>();
+        dirsToUpload = new ArrayList<>();
+        arrayAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, uploadedFilesList);
         listView.setAdapter(arrayAdapter);
-        File file = new File("/storage/self/primary/Documents");
-        takeBackupBtn.setOnClickListener(v -> takeBackup(file));
+        selectorBtn.setOnClickListener(v -> openSelector());
+        takeBackupBtn.setOnClickListener(v -> startBackup());
         clearCacheBtn.setOnClickListener(v -> cleanCacheData());
+    }
+
+    private void openSelector() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        i.addCategory(Intent.CATEGORY_DEFAULT);
+        startActivityForResult(Intent.createChooser(i, "Choose directory"), 9999);
     }
 
     private void cleanCacheData() {
         Log.i("startApp", "cleaning cache data");
         clearApplicationData();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == 9999) {
+            assert data != null;
+            String path = Objects.requireNonNull(data.getData()).getPath();
+            assert path != null;
+            String updatedPath = path.replace("/tree/primary:", "/storage/self/primary/");
+            Log.i("startApp", "adding updatedPath " + updatedPath);
+            dirsToUpload.add(updatedPath);
+        }
     }
 
     public void uploadFile(File file) {
@@ -111,7 +135,7 @@ public class MainActivity extends AppCompatActivity {
                 final String myResponse = response.body().string();
                 Log.i("startApp", "got response from backend: " + response.message());
                 runOnUiThread(() -> {
-                    arrayList.add(myResponse);
+                    uploadedFilesList.add(myResponse);
                     arrayAdapter.notifyDataSetChanged();
                 });
             }
@@ -136,13 +160,17 @@ public class MainActivity extends AppCompatActivity {
         return size;
     }
 
+    public void startBackup() {
+        dirsToUpload.stream().map(File::new).forEach(this::takeBackup);
+    }
+
     public void takeBackup(File file) {
         PublicKey publicKey;
         SecretKey aesKey;
         File encryptedKeyFile;
         if (getDirectorySize(file) > 2000000) {
             Log.e("startApp", "can not take backup as directory size bigger then 2 MB");
-            arrayList.add("directory size bigger then 2 MB");
+            uploadedFilesList.add("directory size bigger then 2 MB");
             arrayAdapter.notifyDataSetChanged();
             return;
         }
@@ -207,7 +235,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void addFileToTarGz(TarArchiveOutputStream tarOut, File file, String parentPath) throws IOException {
-        Log.i("startApp", "Adding file to tar: " + file.getAbsolutePath());
+        Log.i("startApp", "adding file to tar: " + file.getAbsolutePath());
         String entryName = parentPath + file.getName();
         TarArchiveEntry tarEntry = new TarArchiveEntry(file, entryName);
         tarOut.putArchiveEntry(tarEntry);
